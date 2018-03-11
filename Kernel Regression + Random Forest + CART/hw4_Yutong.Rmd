@@ -1,0 +1,553 @@
+---
+author: "Yutong Dai(yutongd3@illinois.edu)"
+date: "`r Sys.Date()`"
+lecnum: "4"
+instructor: "Ruoqing Zhu"
+course: "STAT-542"
+term: "2017 Fall"
+output: 
+  pdf_document:
+    number_sections: yes
+    template: "/Users/ym/Desktop/Fall-2017/542/homework/textem/template.tex"
+    keep_tex: no
+fontsize: 11pt
+bibliography: "/Users/ym/Desktop/Fall-2017/542/homework/textem/book.bib"
+link-citations: yes
+linkcolor: "black"
+csl: "/Users/ym/Desktop/Fall-2017/542/homework/textem/ieee.csl"
+header-includes:
+  - \newcommand{\iid}{\overset{iid}\sim}
+  - \usepackage{graphicx}
+  - \usepackage{float}
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(fig.pos = 'H',fig.align = "center",fig.height = 4)
+```
+
+# Question 1
+Write your own code to fit a Nadaraya-Watson kernel regression estimator for a one dimensional problem. Let’s consider just the Gaussian kernel function, and your function should include a tuning parameter for the bandwidth. Perform the following:
+
+## a)  {-}
+
+Just like what we did in previous homework, you should generate a toy data example and validate that your code is correct.
+
+**Solution**:
+
+```{r}
+KernelRegression <- function(x,y,x0,bandwidth){
+  # ------------------------- function document --------------------------------
+  # Perform univariate Gaussian Kernel Regression
+  #
+  # @Args:
+  # x:  predictor; matrix n*1
+  # y:  response; matrix n*1
+  # x0: points you want to predict; matix m*1	
+  # bandwidth: bandwidth used in the kernel function
+  
+  # @values:
+  #	fval: prediced value at points x0
+  x0 <- matrix(x0,ncol=1)
+  x <- matrix(x,ncol=1)
+  y <- matrix(y,ncol=1)
+  GaussianKernel <- function(xi,x0,bandwidth){
+    bandwidth <- 0.3706506 * bandwidth
+    distance <- (xi - x0) / bandwidth
+    kval <- 1 / sqrt(2 * pi) * exp(- distance^2/2)
+    # prevent zero 
+    label <- which(kval <= 1e-12)
+    kval[label] <- 1e-12
+    return(kval / bandwidth)
+  }
+  fval <- rep(0,length(x0))
+  for (j in seq_len(length(x0))){
+    weights <- sapply(x,GaussianKernel,x0[j],bandwidth)
+    nomralizer <- sum(weights)
+    weights <- weights / nomralizer
+    fval[j] <- t(weights) %*% y
+  }
+  return(fval)
+}
+```
+
+Suppose the true model is
+$$
+  y_i = 2 * \sin x_i + \epsilon_i, \quad \epsilon \iid N(0,1).
+$$
+Then we generate training data set and test data set.
+
+```{r}
+# generate test data
+set.seed(1234)
+x.train <- runif(100, 0, 2*pi)
+x.train <- x.train[order(x.train)]
+y.train <- 2 * sin(x.train) + rnorm(length(x.train))
+x.test <- seq(0,2*pi,0.2)
+y.test <- 2 * sin(x.test) + rnorm(length(x.test))
+```
+
+Prediction values are given below. From this output, my results are quite close to those given by `ksmooth`.
+
+```{r,echo=T}
+myfit <- KernelRegression(x.train,y.train,x.test,bandwidth = 0.5)
+ksfit <- ksmooth(x.train, y.train, kernel = "normal", 
+                 bandwidth = 0.5, x.points = x.test)$y
+cbind(y.test,my.pred=myfit,ks.pred=ksfit)[1:4,] # only show a part of results
+```
+
+```{r,fig.cap="Kernel Regression comparison. The red dots are test points. The black sine curve is the true model. The regreesion curve and blue represents my fitted model and ksmooth fitted model."}
+x.plot <- seq(0,2*pi,0.1)
+y.plot <- 2 * sin(x.plot)
+plot(x.plot,y.plot,type="l",lty=6,col="1",ylim=c(-3,3),
+     xlab="x",ylab="y")
+points(x.test,y.test,col="2",cex=0.8)
+lines(x.test,myfit,lty=1,col="3")
+lines(x.test,ksfit,lty=3,col="4")
+legend("bottomleft",
+       legend=c("true model","myfit","ksmooth fit"),
+       lty=c(6,1,3), col=c(1,3,4))
+```
+
+
+
+## b) {-}
+
+Download the “Video Game Sales with Ratings” dataset from Kaggle https:// www.kaggle.com/rush4ratio/video-game-sales-with-ratings. Perform your kernel estimator to estimate the log(1 + Global Sales) using each of the three scores: Critic Score, Critic Count and User Score. Ignore observations with any missing value (ignore text value too). You should try to tune the bandwidth using cross-validation. Which score gives the best model? Demonstrate your results and make a conclusion.
+
+**Solution**:
+```{r}
+KR.cv <- function(x,y,bandwidthrange,K=10){
+  y <- y[order(x)]
+  x <- x[order(x)]
+  x <- matrix(x,ncol=1)
+  y <- matrix(y,ncol=1)
+  if (!exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE))
+    seed <- get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  n <- nrow(x)
+  if ((K > n) || (K <= 1))
+    stop("'K' outside allowable range")
+  K.o <- K
+  K <- round(K)
+  kvals <- unique(round(n/(1L:floor(n/2))))
+  temp <- abs(kvals - K)
+  if (!any(temp == 0))
+    K <- kvals[temp == min(temp)][1L]
+  if (K != K.o)
+    warning(gettextf("'K' has been set to %f", K), domain = NA)
+  f <- ceiling(n/K)
+  s <- sample(rep(1L:K, f), n)
+  ms <- max(s)
+  MSE <- rep(0,length(bandwidthrange))
+  sd <- rep(0,length(bandwidthrange))
+  for (t in seq_len(length(bandwidthrange))){
+    mse.t <- matrix(NA,nrow = K,ncol=1)
+    for (i in seq_len(ms)){
+      j.out <- seq_len(n)[(s == i)]
+      j.in <- seq_len(n)[(s != i)]
+      x.i<-x[j.in,,drop=FALSE]
+      y.i<-y[j.in,,drop=FALSE]
+      y.pred.i <- KernelRegression(x.i,y.i,x[j.out,,drop=FALSE],
+                                   bandwidth=bandwidthrange[t])
+      y.test.i <- y[j.out,,drop=FALSE]
+      mse.t[i,1] <- sum((y.pred.i - y.test.i)^2)/length(y.test.i) 
+    }
+    MSE[t] <- sum(mse.t) / K
+    sd[t] <- sd(mse.t)
+  }
+  index <- which.min(MSE)
+  best.bandwidth <- bandwidthrange[index]
+  results <- list(best.bandwidth=best.bandwidth,
+                  bandwidthrange=bandwidthrange,
+                  MSE=MSE,sd=sd)
+  class(results) <- "KernelRegression"
+  return(results)	
+}
+```
+
+
+```{r}
+Video_Games_Sales <- read.csv("Video_Games_Sales_as_at_22_Dec_2016.csv")
+Video_Games_Sales = na.omit(Video_Games_Sales)
+y <- log(1 + Video_Games_Sales$Global_Sales)
+x1 <- Video_Games_Sales$Critic_Score
+x2 <- Video_Games_Sales$Critic_Count
+x3 <- Video_Games_Sales$User_Score
+fit1 <- KR.cv(x1,y,bandwidthrange=seq(1,10,length.out = 50),K=10)
+fit2 <- KR.cv(x2,y,bandwidthrange=seq(1,30,length.out = 50),K=10)
+fit3 <- KR.cv(x3,y,bandwidthrange=seq(0.1,5,length.out = 50),K=10)
+```
+
+```
+fit1 <- KR.cv(x1,y1,bandwidthrange,K=10)
+fit2 <- KR.cv(x2,y2,bandwidthrange,K=10)
+fit3 <- KR.cv(x3,y3,bandwidthrange,K=10)
+# Details of KR.cv can be found in the accompany Rmd file.
+```
+
+
+```{r,fig.cap="\\label{cvcompare}In this figure, from left panel to the right panel, the bandwidth v.s mean squared prediction error(MSE) plots are shown for Critic Score, Critic Count and User Score respectively. 10-fold cross-validation is emploed. The black intervals indicate the minimum MSE within one-sigma interval. The red lines indicate the suggested bandwidth, whose corresponding MSEs fall into the black intervals. The suggested bandwidth for Critic Score, Critic Count and User Score are $3.38, 12.24$ and $0.7$ respectively."}
+par(mfrow=c(1,3))
+plot(fit1$MSE,type="l")
+plot(fit2$MSE,type="l")
+plot(fit3$MSE,type="l")
+```
+
+The tested bandwidth for `variablesCritic_Score`, `Critic_Count` and `User_Score` are different since the bandwidth gives the minimal 10-fold cross validtion errors is different.
+For `variablesCritic_Score`, the suggeste bandwidth is `r fit1$best.bandwidth` with the minimal MSE `r min(fit1$MSE)`; for `Critic_Count` the suggested band width is `r fit2$best.bandwidth` with  the minimal MSE `r min(fit2$MSE)`; for `User_Score`  the suggested band width is `r fit3$best.bandwidth` with the minimal MSE `r min(fit3$MSE)`.
+
+# Question 2
+Recall Question 2 in HW1, we did a simulation study to estimate the degrees of freedom of kNN. Lets do a similar experiment for random forests. The purpose is to understand the effect of different tuning parameters of random forests. Generate $X$ from independent standard normal distribution with $n = 200$ and $p = 20$. For the true model, use $f(X) = 1 + 0.5\sum_{j=1}^4X_j$ and standard normal errors. Use the randomForest package for this question.
+
+```{r}
+n <- 200; p =20
+X <- matrix(rnorm(n*p,0,1),nrow=n,ncol=p)
+y <- 1 + 0.5 * (X[,1] + X[,2] + X[,3] + X[,4]) + rnorm(n)
+```
+
+
+## a) {-}
+Use the default values of `ntree`, tune different values of `mtry` and `nodesize` (make your own choice). Estimate and compare the degrees of freedom for these models. Summarize your results and comment on the effect of these two parameters.
+
+**Solution**:
+
+To estimate the degree of freedom for each tree, we have to apply the formula
+
+$$
+  df(\hat f) = \frac{1}{\sigma^2}\sum_{i=1}^n \text{Cov}(\hat y_i, y_i).
+$$
+
+The *Simulation setup* for estimating $\text{Cov}(\hat y_i, y_i)$ is to generate $y_i$ 20 times for given $x_i$ and find the corresponding estimated $\hat y_i$. Then use the sample covariance to estimate the $\text{Cov}(\hat y_i, y_i)$. The key part of the code is given below and the complete one can be found at the accompanying Rmd file.
+
+```
+for (mtry in mtrys){
+  nr <- nr + 1
+  nc <- 0
+  for (nodesize in nodesizes){
+    nc <- nc + 1
+    for (i in seq_len(repeat_times)){
+      # random forest for regression
+      set.seed(i+nc+nr)
+      rf.i <-  randomForest(x, ymat[,i], ntree = 500, 
+                            mtry = mtry, nodesize = nodesize)
+      ypred.mat[,i] <- predict(rf.i, x)
+    }
+    z<- (ypred.mat - apply(ypred.mat,1,mean)) * (ymat - apply(ymat,1,mean))
+    cov_mat <- apply(z,1,sum) / (repeat_times - 1)
+    df_mat[nr,nc] <- sum(cov_mat)
+  }
+}
+```
+
+```{r}
+# rm(list=ls())
+# library(randomForest)
+# n <- 200; p <- 20; repeat_times <- 20;
+# set.seed(1234)
+# x <- matrix(rnorm(n*p, mean=0, sd=1), ncol=p, nrow=n)
+# ymat <- matrix(NA, ncol=repeat_times, nrow=n)
+# ypred.mat <- ymat
+# for (i in seq_len(repeat_times)){
+#   set.seed(i)
+#   ymat[,i] <- 1 + 0.5 * rowSums(x[1:4,]) + rnorm(n, mean=0, sd=1)
+# }
+# # mtry and nodesize pools
+# mtrys <- floor(c(1, p / 3, 2 * p / 3, p))
+# nodesizes <- c(5, 15, 25)
+# rowlabel <- NULL
+# for (i in mtrys){
+#   rowlabel <- c(rowlabel,paste("mtry=",i))
+# }
+# collabel <- NULL
+# for (i in nodesizes){
+#   collabel <- c(collabel,paste("nodesize=",i))
+# }
+# df_mat <- matrix(NA, ncol=length(nodesizes), nrow=length(mtrys))
+# colnames(df_mat) <- collabel; rownames(df_mat) <- rowlabel
+# nr <- 0
+# for (mtry in mtrys){
+#   nr <- nr + 1
+#   nc <- 0
+#   for (nodesize in nodesizes){
+#     nc <- nc + 1
+#     for (i in seq_len(repeat_times)){
+#       # random forest for regression
+#       set.seed(i+nc+nr)
+#       rf.i <-  randomForest(x, ymat[,i], ntree = 500, 
+#                             mtry = mtry, nodesize = nodesize)
+#       ypred.mat[,i] <- predict(rf.i, x)
+#     }
+#     z<- (ypred.mat - apply(ypred.mat,1,mean)) * (ymat - apply(ymat,1,mean))
+#     cov_mat <- apply(z,1,sum) / (repeat_times - 1)
+#     df_mat[nr,nc] <- sum(cov_mat)
+#   }
+# }
+# save(df_mat,file="df_mat_Q2.Rdata")
+```
+
+The results are given in the \autoref{table}. It can be seen that, for fixed to `mtry`, the larger nodesize is, the simpler the model is, i.e., smaller degrees of freedom. However, for fixed to `nodesize`, the larger mtry is, the more complex the model is, i.e., larger degrees of freedom. We  also visualize this result in \autoref{heatmap}.
+
+```{r}
+load("df_mat_Q2.Rdata")
+knitr::kable(df_mat,caption="\\label{table}Simulated degree of freedom with different mtry and nodesize combinations.")
+```
+
+```{r,fig.height=3.5,fig.cap="\\label{heatmap}A simple visulization of changes of degree of freedom with different combinations of nodesize and mtry."}
+library(ggplot2)
+df.plot <- data.frame(
+  df=as.numeric(t(df_mat)),
+  nodesize=as.factor(rep(c(5,15,25),4)),
+  mtry=as.factor(c(rep(1,3),rep(6,3),
+                   rep(13,3),rep(20,3)))
+)
+ggplot(df.plot, aes(x=nodesize, y=mtry, fill=df)) + geom_raster() +
+  scale_fill_gradient(low = "orange", high = "red")
+```
+
+
+## b) {-}
+Fix `mtry` and `nodesize` as the default value, and tune `ntree`. Calculate (estimate) the variance of this estimator, i.e. $$\frac{1}{n}\sum_{i}E_{\hat f}[\hat f(x_i) - E[\hat f(x_i)]]^2$$. Summarize your results and comment on the effect of `ntree`.
+
+**Solution**:
+
+Interpretate the formula of calculating the variance of the estimator
+$$\frac{1}{n}\sum_{i}E_{\hat f}[\hat f(x_i) - E[\hat f(x_i)]]^2$$ in the following ways.
+
+1. Run the current random forest, i.e., fixed `ntree`, $m_i$ times with fixed $(x_i,y_i)$ to obtain $\{\hat y_{ij}\}_{j=1}^{m_i}$. Denote $\bar y_{i.}$ as the mean of $\{\hat y_{ij}\}_{j=1}^{m_i}$ and use $\frac{1}{m_i}\sum_{j=1}^{m_i}(\hat y_{ij} - \bar y_{i.})^2$ to estimate $E_{\hat f}[\hat f(x_i) - E[\hat f(x_i)]]^2$;
+
+2. Average $\frac{1}{m_i}\sum_{j=1}^{m_i}(\hat y_{ij} - \bar y_{i.})^2$ over all sample points $x_i$'s.
+
+```{r}
+# rm(list=ls())
+# library(randomForest)
+# n <- 200; p <- 20; repeat_times <- 20;
+# set.seed(1234)
+# x <- matrix(rnorm(n*p, mean=0, sd=1), ncol=p, nrow=n)
+# y <- 1 + 0.5 * rowSums(x[1:4,]) + rnorm(n, mean=0, sd=1)
+# ypred.mat <- matrix(NA, ncol=repeat_times, nrow=n)
+# # ntree pools
+# ntrees <- c(10,50,100,500,1000,2000)
+# var_mat <- rep(NA, length(ntrees))
+# # random forest for regression
+# count <- 0
+# for (ntree in ntrees){
+# 	count <- count + 1
+# 	for (i in seq_len(repeat_times)){
+# 		set.seed(i)
+# 		rf.i <-  randomForest(x, y, ntree = ntree, 
+# 			mtry = floor(p/3), nodesize = 5)
+# 		ypred.mat[,i] <- predict(rf.i, x)
+# 	}
+# 	var_mat[count] <- mean(rowSums((ypred.mat - apply(ypred.mat,1,mean))^2) / repeat_times)	
+# }
+# save(var_mat,file="var_mat_Q2.Rdata")
+```
+
+The *Simulation setup* is to run the randomforest `repeat_times` and try different `ntree` in the pool `ntrees`. The key part of the code is given below and the complete one can be found at the accompanying Rmd file.
+
+```
+for (ntree in ntrees){
+	count <- count + 1
+	for (i in seq_len(repeat_times)){
+		set.seed(i)
+		rf.i <-  randomForest(x, y, ntree = ntree, 
+			mtry = floor(p/3), nodesize = 5)
+		ypred.mat[,i] <- predict(rf.i, x)
+	}
+	var_mat[count, ] <- mean(rowSums((ypred.mat - 
+	                    apply(ypred.mat,1,mean))^2) / repeat_times)	
+}
+```
+
+The result is shown in \autoref{varde}. We can see that, the we can shrink the estimator's variance by increase the number of trees in the random forest, i.e., increase the `ntree`.
+
+```{r,fig.height=3.5,fig.cap="\\label{varde}Estimator varinace decreases as the ntree increases."}
+rm(list=ls())
+library(ggplot2)
+load("var_mat_Q2.Rdata")
+plot.data <- data.frame(variance=var_mat, ntree=c(10,50,100,500,1000,2000))
+ggplot(plot.data,aes(x=ntree,y=variance)) + geom_line() + geom_point() +
+  scale_y_log10()
+```
+
+
+# Question 3
+Lets write our own code for a one-dimensional adaboost using a stump model as the weak learner.
+
+## a) {-}
+The stump model is a CART model with just one split, hence two terminal nodes. Since we consider only one dimensional predictor, the only thing that needs to be searched in this tree model is the cutting point. Write a function to fit the stump model with subject weights.
+
+**Solution:**
+Key parts of the code are given below (unimportant fragments are substitued by `...`). Detailed implementation can be found at the accompanying Rmd file. 
+
+```
+stump <- function(x,y,w){
+  Gini <- function(x0,y0){...}
+  ...
+  for (c in xrange){
+    split_idx <- max(which(x==c))
+    x_left <- x[1:split_idx]; x_right <- x[-c(1:split_idx)]
+    y_left <- y[1:split_idx]; y_right <- y[-c(1:split_idx)]
+    Gini_left <- Gini(x_left, y_left)
+    Gini_right <- Gini(x_right, y_right)
+    count <- count + 1
+    w_left <- w[1:split_idx]; w_right <- w[-c(1:split_idx)]
+    score_mat[count,1] <- sum(w_left) / sum(w) * Gini_left + 
+      sum(w_right) / sum(w) * Gini_right
+    score_mat[count,2] <- c # cut point
+  }
+  idx <- which.min(score_mat[,1])
+  c <- xrange[idx]
+  y_left <- y[1:idx]; y_right <- y[-c(1:idx)]
+  ...
+}
+stump.predict <- function(xpred,stumpobj){
+  cut_point <- stumpobj$cut_point
+  ifelse(xpred <= cut_point, stumpobj$fval_left, stumpobj$fval_right)
+}
+```
+
+```{r}
+stump <- function(x,y,w){
+  # A stump model for classification with just one split
+  # for one dimensional problem.
+  
+  # @parameters:
+  # x: feature vector; n*1
+  # y: label vector; n*1
+  # w: weights vector; n*1
+  
+  # @values:
+  # cut_point: cutting poings; 1*1
+  # fval_left: left node predictions; n1*1
+  # fval_right: right node predictions; n2*1 n1+n2=n
+  # score_mat: score matrix based on the Gini index;
+  #            the first row is the score;
+  #            the second row is the cut point;
+  Gini <- function(x0,y0){
+    # calculate weighted Gini index for curret node
+    # @values:
+    # return the Gini Index for current node
+    idx <- NULL
+    for (i in intersect(x0,x)){
+      idx <- c(idx,which(x==i))
+    }
+    w0 <- w[idx]
+    p <- (t(w0) %*% (y0==1)) / (sum(w0))
+    return(p * (1 - p))
+  }
+  order.s2l <- order(x)
+  x <- x[order.s2l]
+  y <- y[order.s2l]
+  xrange <-unique(x); xrange <- xrange[-length(xrange)]
+  score_mat <- matrix(NA,nrow=length(xrange),ncol=2)
+  count <- 0
+  for (c in xrange){#browser()
+    split_idx <- max(which(x==c))
+    x_left <- x[1:split_idx]; x_right <- x[-c(1:split_idx)]
+    y_left <- y[1:split_idx]; y_right <- y[-c(1:split_idx)]
+    Gini_left <- Gini(x_left, y_left)
+    Gini_right <- Gini(x_right, y_right)
+    count <- count + 1
+    w_left <- w[1:split_idx]; w_right <- w[-c(1:split_idx)]
+    score_mat[count,1] <- sum(w_left) / sum(w) * Gini_left + 
+      sum(w_right) / sum(w) * Gini_right
+    score_mat[count,2] <- c # cut point
+  }
+  idx <- which.min(score_mat[,1])
+  c <- xrange[idx]
+  y_left <- y[1:idx]; y_right <- y[-c(1:idx)]
+  results <- list(cut_point=c,
+                  fval_left=names(which.max(table(y_left))),
+                  fval_right=names(which.max(table(y_right)))
+  )
+  class(results) <- "stumpobj"
+  return(results)
+}
+
+stump.predict <- function(xpred,stumpobj){
+  cut_point <- stumpobj$cut_point
+  ifelse(xpred <= cut_point, stumpobj$fval_left, stumpobj$fval_right)
+}
+```
+
+A simple test of the validality of the code is given below.
+
+```{r}
+x <- c(1,2,3,4,5,6)
+y <- c(-1,-1,-1,1,1,-1)
+w <- rep(1/length(x),length(x))
+stump(x,y,w)
+```
+
+## b) {-}
+
+Following the lecture slides page 6 in “Boosting.pdf”, write your own code to fit the adaboost model using the stump as the base learner. For this implementation, you are not required to do bootstrapping for each tree (you still can if you want); You should generate the following data to test your code and demonstrate that it is correct. Also generate an independent set of testing data using this model to see if there is any potential overfitting. Comment on your findings.
+
+```{r}
+boosting.stump <- function(x,y,iterations=100){
+  # initialization
+  order.s2l <- order(x)
+  x <- x[order.s2l]
+  y <- y[order.s2l]
+  w <- rep(1 / length(x), length(x))
+  error.mat <- rep(NA,iterations)
+  cut_points <- rep(NA,iterations)
+  alphas <- rep(NA,iterations)
+  learners <- list()
+  for (t in seq_len(iterations)){#browser()
+    learner.t <- stump(x,y,w)
+    learners[[t]] <- learner.t
+    fitted.t <- as.numeric(stump.predict(x,learner.t))
+    #print(paste("error",sum(fitted.t != y)))
+    error.mat[t] <- sum(fitted.t != y) / length(y)
+    epsilon.t <- t(w) %*% (fitted.t != y)
+    #print(paste("epsilon",epsilon.t))
+    alpha.t <- 0.5 * log( (1 - epsilon.t) / epsilon.t)
+    alphas[t] <- alpha.t
+    cut_points[t] <- learner.t$cut_point
+    w <- w * exp( c(-alpha.t) * y * fitted.t) # update weight
+    w <- w / sum(w) # normalize weight
+  }
+  results <- list(cut_points=cut_points,
+                  alphas=alphas,
+                  learners=learners,
+                  iterations=iterations,
+                  y=y)
+  class(results) <- "stumpboostobj"
+  return(results)
+}
+
+boosting.stump.predict <- function(xpred,stumpboostobj,shrinkage=1){
+  order.s2l <- order(xpred)
+  xpred <- xpred[order.s2l]
+  fitted <- rep(0,length(xpred))
+  error <- rep(NA,stumpboostobj$iterations)
+  for (i in seq_len(stumpboostobj$iterations)){#browser()
+    fitted <- shrinkage * stumpboostobj$alphas[i] * 
+      as.numeric(stump.predict(xpred,stumpboostobj$learners[[i]])) + fitted
+    error[i] <- sum(sign(fitted) != stumpboostobj$y) / length(fitted)
+  }
+  results <- list(fitted=sign(fitted),error=error)
+  return(results)
+}
+```
+
+### code verification {-}
+
+```{r}
+set.seed(2)
+n = 300
+x = runif(n)
+y = (rbinom(n , 1 , (sin (4*pi*x)+1)/2)-0.5)*2
+```
+
+```{r}
+# boostedstump <- boosting.stump(x,y,iterations=20)
+# pred <- boosting.stump.predict(x,boostedstump)
+# pred$error
+```
+
+
+
+    

@@ -1,0 +1,133 @@
+---
+title: "STAT542 Statistical Learning Homework 4"
+author: "Huamin Zhang"
+date: "Nov 14, 2017"
+output: pdf_document
+fig_caption: true
+geometry: margin = 0.65in
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+### Name: Huamin Zhang (huaminz2@illinois.edu)
+
+\section{Question 2}
+
+\subsection{a) [20 points]}
+
+##Answer:
+To estimate the degree of freedom for each tree, we use the formula:
+$$
+  df(\hat f) = \frac{1}{\sigma^2}\sum_{i=1}^n \text{Cov}(\hat{y_i}, y_i).
+$$
+To estimating $\text{Cov}(\hat{y_i}, y_i)$, we fix X and do 20 times simulation.(Generate Y, fit the model, and predict $\hat{Y}$. Then use the sample covariance to estimate the degree of freedom.
+
+```{r}
+library(MASS)
+library(randomForest)
+# Set the sedd, number of observation and dimension
+set.seed(0); P = 20; N = 200
+# Function generate_data: Generate the data, input the number of observation N, 
+# dimension P, and randam seed, return the data X and the response variable Y 
+# with standard normal errors.
+generate_data<-function(N,P,seed_x,seed_y){
+  I = diag(nrow = P)
+  set.seed(seed_x); X = as.matrix(mvrnorm(N, mu=rep(0,P), Sigma=I))
+  set.seed(seed_y); Y = 1 + 0.5 * (X[,1] + X[,2] + X[,3] + X[,4]) +  rnorm(N)
+  return(list(X = X, Y = Y))
+}
+# N: The number of observation
+# P: The dimension of the data
+# mtry: A seq of mtry parameters to estimate degree of freedom
+# nodesize: A seq of nodesize parameters to estimate degree of freedom
+# iter: The number of simulations we will perform 
+# Output: result: A matrix, the row name is the nodesize, the column name
+#         is the mtry, and the value is the estimation of Dof
+DoF_RF_mtry_nodesize<-function(N,P,mtry,nodesize,iter){
+  mtry_n = length(mtry); nodesize_n = length(nodesize)
+  result = matrix(NA,nodesize_n,mtry_n)
+  rownames(result) = nodesize; colnames(result) = mtry
+  for(i in 1:nodesize_n){
+    for(j in 1:mtry_n){
+      Y.pred = NULL; Y.ture = NULL
+      for(m in 1:iter){
+        data = generate_data(N,P,0,m); X = data$X; Y = data$Y
+        rf.fit = randomForest(X, Y, mtry = mtry[j], nodesize = nodesize[i])
+        Y.ture = cbind(Y.ture,Y); Y.pred = cbind(Y.pred, predict(rf.fit, X))
+      }
+      # Calculate the degree of freedom
+      result[i,j] = sum(sapply(1:N, function(x) cov(Y.ture[x,],Y.pred[x,])))
+    }
+  }
+  return(result)
+}
+mtry = seq(1,19,3); nodesize =c(seq(3,30,3),50,100)
+```
+```{r,eval=FALSE}
+mtry_nodesize_result = DoF_RF_mtry_nodesize(N,P,mtry,nodesize,20)
+```
+```{r}
+load("Q2.Rdata")
+mtry_nodesize_result
+```
+In the matrix, the row name is the nodesize, the column name is the mtry, and the value is the estimation of DOF. According to the matrix, we make a plot to summary the relation between Degree of freedom and mtry, nodesize. **We find that when the nodesize parameter increases, the DOF of Random Forest decreses. And when the mty parameter increases, the DOF of Random Forest increases.**
+```{r}
+plot(x = NULL, y= NULL,xlim=c(3,100),ylim=c(5,125),xlab = "Nodesize", 
+     ylab = "Degree of freedom")
+for(i in 1:dim(mtry_nodesize_result)[2]){
+  lines(rownames(mtry_nodesize_result),mtry_nodesize_result[,i],type='l', col = i)
+}
+legend("topright", c("mtry = 1","mtry = 4","mtry = 7","mtry = 10", "mtry = 13",
+        "mtry = 16","mtry = 19"), col = 1:7, cex = 1, lty = 1)
+title(main = "mtry and nodesize versus Degree of freedom")
+```
+
+\subsection{b) [15 points]}
+
+##Answer:
+To estimate the variance of this estimator, we use the formula:
+$$
+  \frac{1}{n}\sum_{i}^{n}E_{\hat{f}}(\hat{f}(x_i) - E[\hat{f}(x_i)])^2
+$$
+```{r}
+# N: The number of observation
+# P: The dimension of the data
+# ntree: A seq of ntree parameters to estimate degree of freedom
+# iter: The number of simulations we will perform 
+# Output: result: A matrix of the ntree parameters and the corresponding
+#         degree of freedom
+Var_RF_ntree<-function(N,P,ntree,iter){
+  ntree_n = length(ntree); var = rep(NA,ntree_n)
+  for(i in 1:ntree_n){
+    Y.pred = NULL; Y.ture = NULL
+    for(m in 1:iter){
+      data = generate_data(N,P,0,0)
+      X = data$X; Y = data$Y; set.seed(m)
+      rf.fit = randomForest(X, Y, ntree = ntree[i])
+      Y.ture = cbind(Y.ture,Y); Y.pred = cbind(Y.pred, predict(rf.fit, X))
+    }
+    # Calculte the variance
+    var[i] = sum(sapply(1:N, function(x) mean((Y.pred[x,] - mean(Y.pred[x,]))^2))) / N
+  }
+  result = rbind(ntree,var)
+  return(result)
+}
+```
+```{r,eval=FALSE}
+ntree = c(5,10,50,100,200,500,1000,2000,3000,4000)
+ntree_result = Var_RF_ntree(N,P,ntree,20)
+```
+```{r}
+ntree_result
+```
+According to the matrix, we make a plot to summary the relation between the variance of this estimator and ntree. **We find that when the ntree parameter increases, the variance of this estimator decreases. We can shrink the estimator's variance using ntree parameter.**
+```{r,fig.height=4}
+plot(x = ntree_result[1,][3:10], y= ntree_result[2,][3:10],xlab = "ntree", 
+     ylab = "Variance of RF estimator",col = "red", type = 'l')
+points(ntree_result[1,][3:10], ntree_result[2,][3:10])
+title(main = "ntree versus Variance of RF estimator")
+```

@@ -1,0 +1,777 @@
+---
+title: "STAT542 Statistical Learning Homework 5"
+author: "Huamin Zhang"
+date: Dec 19, 2017
+output: pdf_document
+fig_caption: true
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+### Name: Huamin Zhang (huaminz2@illinois.edu)
+
+\section{Question 1 [15 points]}
+
+##Answer:
+
+Since $A$ is an invertible square matrix, we get $AA^{-1} = A^{-1}A = I_{n \times n}$. And $b$ is a column vector, so $1-b^TA^{-1}b$ is a scalar. Thus, if $A-bb^T$ is invertible, we can get
+$$
+\begin{aligned}
+& (A-bb^T)(A^{-1} + \frac{A^{-1}bb^TA^{-1}}{1-b^TA^{-1}b}) \\
+= &\text{ } AA^{-1} - bb^TA^{-1} +\frac{AA^{-1}bb^TA^{-1}}{1-b^TA^{-1}b} - \frac{bb^TA^{-1}bb^TA^{-1}}{1-b^TA^{-1}b}\\
+= &\text{ } I - bb^TA^{-1} + \frac{bb^TA^{-1} - bb^TA^{-1}bb^TA^{-1}}{1-b^TA^{-1}b}\\
+= &\text{ } I - bb^TA^{-1} + \frac{(b - bb^TA^{-1}b)b^TA^{-1}}{1-b^TA^{-1}b}\\
+= &\text{ } I - bb^TA^{-1} + \frac{b(1 - b^TA^{-1}b)b^TA^{-1}}{1-b^TA^{-1}b} \quad \quad \quad 1-b^TA^{-1}b\text{ is a scalar}\\
+= &\text{ } I - bb^TA^{-1} + bb^TA^{-1}\\
+= &\text{ } I
+\end{aligned}
+$$
+Thus, we can get
+$$
+(A-bb^T)(A^{-1} + \frac{A^{-1}bb^TA^{-1}}{1-b^TA^{-1}b}) = I \Rightarrow (A-bb^T)^{-1} = A^{-1} + \frac{A^{-1}bb^TA^{-1}}{1-b^TA^{-1}b}
+$$
+
+\section{Question 2 [30 points]}
+
+##Answer:
+
+```{r}
+# Function Sliced_Inverse
+# Usage: Sliced_Inverse(X, Y, nslices = 10)
+
+# Arguments
+# X: N by p design matrix
+# Y: N by 1 response variable
+# nslices: number of slices in partioning data. Default 10..
+# Value(Output)
+# M: p by p matrix; Used to find raw eigenvector
+# raw.evectors: p by p matrix; eigen vectors of  M
+# evalues: eigen values of M
+# evectors:  p by p matrix, transform raw.evectors to beta
+Sliced_Inverse <- function(X, Y, nslices = 10){
+  X.row = nrow(X); X.col = ncol(X)
+  # Center the design matrix
+  X.center = scale(X, center=T, scale=F)
+  # Calculate sample covariance matrix
+  cov_matrix = cov(X.center)*(X.row-1)/X.row
+  eigenvector <- eigen(cov_matrix)
+  # Calculate cov^-1/2
+  V = eigenvector$vectors
+  cov_inv_sqrt = V %*% diag(eigenvector$values^(-1/2)) %*% t(V)
+  # Calculate Z matrix
+  Z = X.center %*% cov_inv_sqrt
+  # Sort the dataset
+  Z = Z[order(Y),]
+  # Divide the dataset and calculate zh
+  Z_h = matrix(NA, ncol= X.col, nrow=nslices)
+  slice_size = rep(NA, nslices)
+  size = round(X.row / nslices)
+  for (i in 1:nslices){
+    if(i != nslices){ index = ((i-1)*size+1):(i*size)
+    }else{ index = ((i-1)*size+1):X.row }
+    Z_h[i,] = colMeans(Z[index,])
+    slice_size[i] = length(index)
+  }
+  # Compute the covariance matrix for the slice means of Z,
+  # weighted by the slice sizes
+  Z_mean = colMeans(Z_h); Center_Z = Z_h - Z_mean
+  M = t(Center_Z) %*% apply(Center_Z, 2, "*", slice_size) / X.row
+  # Perform PCA on M
+  pca.M = eigen(M)
+  evalues = pca.M$values
+  raw.evectors = pca.M$vectors
+  evectors = cov_inv_sqrt %*% raw.evectors
+  # normalize beta by column
+  normalizer = t(1/apply(evectors,2, function(x) sqrt(sum(x^2))) %*% t(rep(1,X.col))) 
+  evectors = evectors * normalizer
+  return(list(M = M, raw.evectors = raw.evectors,
+              evectors = evectors, evalues = evalues))
+}
+```
+
+\subsection{a) [10 points]}
+
+**Here we use an underlying model that can be detected by SIR. Suppose the underlying true model is**
+$$
+y = 10000 * (x_1+x_2)^5 + 100*(x_2+x_3)^3 + \epsilon
+$$
+First, we compare our results of $\beta$ with dr package results based on the model.
+```{r}
+library(dr)
+# Generate 1000 observations
+n <- 1000; p <- 10
+set.seed(5)
+X <- matrix(rnorm(n*p), n, p)
+beta1 <- matrix(c(1, 0, 1, rep(0, p-3)))
+beta2 <- matrix(c(0, 1, 0, rep(0, p-3)))
+Y <-  10000 * (X %*% beta1)^5 +  100 * (X %*% beta2)^3 + 0.1 * rnorm(n)
+# fit the SIR model with dr package
+fit.sir <- dr(Y~., data = data.frame(X, Y), method = "sir", nslices=10, numdir=p)
+# fit the SIR model with our code
+myfit <- Sliced_Inverse(X, Y, nslices=10)
+# The mean difference
+mean(abs(myfit$evectors) - abs(fit.sir$evectors))
+# The row eigen values.
+round(myfit$evalues,8)
+# Here we only show the top two eigenvectors
+result <- cbind(myfit$evectors[,1:2],fit.sir$evectors[,1:2])
+colnames(result) <- c("My.evectors.1","My.evectors.2","dr.evectors.1","dr.evectors.2")
+round(result,8)
+```
+**We can see our results are almost the same as the result of dr package, which means the code is correct. Now we compare our estimated direction with the truth.**
+```{r}
+# normalize for direction beta so that we can compare easily
+normalize = function(X){return(X/X[which.max(abs(X))])}
+true_dir1 = normalize(beta1)
+true_dir2 = normalize(beta2)
+esti_dir1 = normalize(myfit$evectors[,1])
+esti_dir2 = normalize(myfit$evectors[,2])
+result = round(cbind(true_dir1,true_dir2,esti_dir1,esti_dir2),3)
+colnames(result) <- c("True dir 1","True dir 2",
+                      "Estimated dir 1","Estimated dir 2")
+round(result,8)
+```
+**Thus, we see our estimated direction is similiar with the truth, which means the SIR method and our code perform well in detecting the underlying model.**
+
+\subsection{b) [10 points]}
+
+**Here we use an underlying model that can be detected by SIR. Suppose the underlying true model is**
+$$
+y = 10000 * (|x_1+x_2|)^5 + 100*(x_2+x_3)^4 + \epsilon
+$$
+First, we compare our results of $\beta$ with dr package results based on the model.
+```{r}
+# Generate 1000 observations
+n <- 1000; p <- 10
+set.seed(6)
+X <- matrix(rnorm(n*p), n, p)
+beta1 <- matrix(c(1, 0, 1, rep(0, p-3)))
+beta2 <- matrix(c(0, 1, 0, rep(0, p-3)))
+Y <-  10000 * (abs(X %*% beta1))^5 +  100 * (X %*% beta2)^4 + 0.1 * rnorm(n)
+# fit the SIR model with dr package
+fit.sir <- dr(Y~., data = data.frame(X, Y), method = "sir", nslices=10, numdir=p)
+# fit the SIR model with our code
+myfit <- Sliced_Inverse(X, Y, nslices=10)
+# The mean difference
+mean(abs(myfit$evectors) - abs(fit.sir$evectors))
+# The row eigen values.
+round(myfit$evalues,8)
+# Here we only show the top two eigenvectors
+result <- cbind(myfit$evectors[,1:2],fit.sir$evectors[,1:2])
+colnames(result) <- c("My.evectors.1","My.evectors.2","dr.evectors.1","dr.evectors.2")
+round(result,8)
+```
+**We can see our results are almost the same as the result of dr package, which means the code is still correct. Now we compare our estimated direction with the truth.**
+```{r}
+# normalize for direction beta so that we can compare easily
+normalize = function(X){return(X/X[which.max(abs(X))])}
+true_dir1 = normalize(beta1)
+true_dir2 = normalize(beta2)
+esti_dir1 = normalize(myfit$evectors[,1])
+esti_dir2 = normalize(myfit$evectors[,2])
+result = round(cbind(true_dir1,true_dir2,esti_dir1,esti_dir2),3)
+colnames(result) <- c("True dir 1","True dir 2",
+                      "Estimated dir 1","Estimated dir 2")
+round(result,8)
+```
+**Thus, we see all the eigenvalues are small, and the our estimated direction is totally difference with the truth, which means the SIR method and our code perform bad in detecting the underlying model.**
+
+\section{Question 3 [55 points]}
+
+##Answer:
+
+Before the report, let me introduce the data clean part. 
+
+First, we delete the text data features, such as `original_title`, `overview`, `title`, `tagline`. 
+
+Second, we delete the `homepage` feature. 
+
+Third, we delete information after the release date, such as `popularity`, `vote_count`. 
+
+Fourth, some of the **feature engineering** part. We abstract the information from  nested features, such as `genres`, `keywords` and `production_companies` etc. For example, if the raw observation A is `{attr1:(A,B)}` B is `{attr1:(A,C)}`, we transform it to A: `{attr1.A:1, attr1.B:1, attr1.C:0}` and B:`{attr1.A:1, attr1.B:0, attr1.C:1}`. 
+
+Fifth, we select the variables that appears in more than five observations. We think if one variables that appears in only one observation doesn't make sense. 
+
+Sixth, we abstract the year and month information from the `release date`. 
+
+Seventh, we delete these obsearvation whose `budget` and `revenue` is 0 which means there is missing value.
+
+### Part I. Predict Revenue
+
+\subsection{a) [5 points]}
+In this question, we will use two models, **group lasso regression and random forest. **
+
+First, we select the features whose correlation with y is not less than 0.1. Finally, we have 91 features, and there are 1627 observation in train data adn 1562 observation in test data.
+
+For group lasso regression model, the measure we use is mean absolute error. We use 10-fold cross-validation to tune the parameter `lambda`. The code and tuning result can be find in HW5_STAT542_huaminz2.Rmd and regression_tune.Rdata.
+
+```{r, echo = F}
+rm(list=ls())
+library(glmnet)
+library(randomForest)
+library(caret)
+# read data
+data = read.csv('tmdb_5000_movies_step2_with_keyword.csv')
+data = data[-which(data$revenue_budget_ratio > 100),]
+#head(data)
+#colnames(data)
+
+##########revenue as Y########################################
+Y <- data$revenue
+#Y <- data$revenue_budget_ratio
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.1]
+X_test <- X_test[, r >= 0.1]
+
+# lasso
+X_train <- as.matrix(X_train)
+X_test <- as.matrix(X_test)
+lasso1.cv <- cv.glmnet(X_train, Y_train, alpha = 1, nfolds = 10, type.measure = 'mae', type.multinomial = 'grouped')
+lasso1 <- glmnet(X_train, Y_train, alpha = 1, lambda = lasso1.cv$lambda.min)
+Y_pre_lasso1 <- predict(lasso1, X_test)
+error_lasso1 <- mean(abs(Y_pre_lasso1 - Y_test))
+
+##########revenue_budget_ratio as Y########################################
+#Y <- data$revenue
+Y <- data$revenue_budget_ratio
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.1]
+X_test <- X_test[, r >= 0.1]
+
+# lasso
+X_train <- as.matrix(X_train)
+X_test <- as.matrix(X_test)
+lasso2.cv <- cv.glmnet(X_train, Y_train, alpha = 1, nfolds = 10, type.measure = 'mae', type.multinomial = 'grouped')
+lasso2 <- glmnet(X_train, Y_train, alpha = 1, lambda = lasso1.cv$lambda.min)
+Y_pre_lasso2 <- predict(lasso2, X_test)
+error_lasso2 <- mean(abs(Y_pre_lasso2 * data$budget[data$id %% 2 == 0] - data$revenue_budget_ratio[data$id %% 2 == 0]))
+```
+
+For random forest model, the measure we use is mean absolute error. We tune the parameter `mtry`, `nodesize` and `ntree`. The code and tuning result can be find in HW5_STAT542_huaminz2.Rmd and regression_tune.Rdata.
+
+```{r  eval=F, echo = F}
+#Random Forest
+##########revenue as Y########################################
+#choose the best parameter
+Y <- data$revenue
+#Y <- data$revenue_budget_ratio
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.1]
+X_test <- X_test[, r >= 0.1]
+mtry = c(10,20,30,50)
+ntree = c(100,200,500)
+nodesize = c(5,10,25,50)
+acc1 = matrix(0,48, 4)
+p = 0
+for(i in 1:length(mtry)){
+  for(j in 1:length(ntree)){
+    for(k in 1:length(nodesize)){
+      p = p + 1
+      cv_partition <- createDataPartition(Y_train, p=.9, list=FALSE)
+      train_1_x = as.matrix(X_train[cv_partition,])
+      train_validation_x = as.matrix(X_train[-cv_partition,])
+      train_1_y = Y_train[cv_partition]
+      train_validation_y = Y_train[-cv_partition]
+      rf_model<-randomForest(train_1_x, train_1_y,ntree = ntree[j], mtry = mtry[i], nodesize = nodesize[k],keep.forest=T)
+      pred_y = predict(rf_model,newdata=train_validation_x)
+      acc1[p,4] = mean(abs(pred_y - train_validation_y))
+      acc1[p,1] = ntree[j]; acc1[p,2] = mtry[i]; acc1[p,3] = nodesize[k]
+    }
+  }
+}
+```
+
+```{r echo = F, cache=T}
+set.seed(0)
+Y <- data$revenue
+#Y <- data$revenue_budget_ratio
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.1]
+X_test <- X_test[, r >= 0.1]
+rf1 = randomForest(X_train, Y_train, ntree = 1000, mtry = 20, nodesize = 5) 
+Y_pre_rf1 <- predict(rf1, X_test)
+error_rf1 <- mean(abs(Y_pre_rf1 - Y_test))
+```
+
+```{r  eval=F, echo = F}
+#Random Forest
+##########revenue_budget_ratio as Y########################################
+#Y <- data$revenue
+Y <- data$revenue_budget_ratio
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.05]
+X_test <- X_test[, r >= 0.05]
+mtry = c(10,20,30)
+ntree = c(100,200,500)
+nodesize = c(5,10,25,50)
+acc2 = matrix(0,48, 4)
+p = 0
+for(i in 1:length(mtry)){
+  for(j in 1:length(ntree)){
+    for(k in 1:length(nodesize)){
+      p = p + 1
+      cv_partition <- createDataPartition(Y_train, p=.9, list=FALSE)
+      train_1_x = as.matrix(X_train[cv_partition,])
+      train_validation_x = as.matrix(X_train[-cv_partition,])
+      train_1_y = Y_train[cv_partition]
+      train_validation_y = Y_train[-cv_partition]
+      rf_model<-randomForest(train_1_x, train_1_y,ntree = ntree[j], mtry = mtry[i], nodesize = nodesize[k],keep.forest=T)
+      pred_y = predict(rf_model,newdata=train_validation_x)
+      acc2[p,4] = mean(abs(pred_y - train_validation_y))
+      acc2[p,1] = ntree[j]; acc2[p,2] = mtry[i]; acc2[p,3] = nodesize[k]
+    }
+  }
+}
+```
+
+```{r echo = F, cache=T}
+set.seed(0)
+#Y <- data$revenue
+Y <- data$revenue_budget_ratio
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.1]
+X_test <- X_test[, r >= 0.1]
+rf2 = randomForest(X_train, Y_train, ntree = 500, mtry = 30, nodesize = 5) 
+Y_pre_rf2 <- predict(rf2, X_test)
+error_rf2 <- mean(abs(Y_pre_rf2 * data$budget[data$id %% 2 == 0] - data$revenue_budget_ratio[data$id %% 2 == 0]))
+```
+
+```{r echo =F, eval=F}
+save(Y_pre_lasso1, Y_pre_lasso2, error_lasso1, error_lasso2, acc1, acc2 ,
+     Y_pre_rf1, Y_pre_rf2, error_rf1, error_rf2, file = 'regreesion_tune.Rdata')
+```
+
+**For feature engineering, we also create a feature as `revenue_budget_ratio` as the prediction target.** 
+
+\subsection{b) [5 points]}
+
+**Here use the mean absolute error to compare these two model and select the best one with the smallest error. **
+
+```{r echo=F}
+result = matrix(0,2,2)
+colnames(result) = c('revenue','revenue_budget_ratio')
+rownames(result) = c('Group Lasso','Random Forest')
+result[1,1] = error_lasso1
+result[1,2] = error_lasso2
+result[2,1] = error_rf1
+result[2,2] = error_rf2
+result
+```
+The mae of group lasso regression model is `r error_lasso1/10^6` million and the mae of random forest model `r error_rf1/10^6` million. And the error with `revenue_budget_ratio` is about `r error_lasso2/10^6` million with lasso model, and `r error_rf2/10^6` million with Random Forest model. Thus, we use the random forest model with `revenue` as target. The parameter of random forest is `ntree` = 500, `mtry` = 30 and `nodesize` = 5. Here we show the plot of prediction of random forest and group lasso regression model.
+
+```{r, echo=FALSE,fig.width=15,fig.height=5}
+Y <- data$revenue
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.1]
+X_test <- X_test[, r >= 0.1]
+par(mfrow=c(1,2))
+plot(1:length(Y_test),Y_pre_lasso1[order(Y_test)],'l',col='green',xlab = 'Sorted sequence', ylab = 'Revenue', main = 'The comparison of true value of revenue \n with the prediction of lasso model')
+lines(Y_test[order(Y_test)],pch=19,col='red',cex=1,lwd=3)
+legend("topleft", c("Prediction","True value"),col=c("green", "red"), lty=c(1,1),text.col=c("green", "red"), cex = 0.8)
+
+plot(1:length(Y_test),Y_pre_rf1[order(Y_test)],'l',col='green',xlab = 'Sorted sequence', ylab = 'Revenue',main = 'The comparison of true value of revenue \n with the prediction of Random forest model')
+lines(Y_test[order(Y_test)],pch=19,col='red',cex=1,lwd=3)
+legend("topleft", c("Prediction","True value"),col=c("green", "red"), lty=c(1,1),text.col=c("green", "red"), cex = 0.8)
+```
+In this plot, we see the trend of test data is well fitted by prediction values. 
+
+**The importance of predictors (top 10) given by random forest can be shown as the following:**
+
+```{r echo=FALSE}
+result = as.matrix(importance(rf1,scale = TRUE)[order(importance(rf1)[,1],decreasing = TRUE),])
+colnames(result) = c('IncNodePurity')
+head(result,10)
+```
+
+**Also, we make a plot of the importance predictors in Random Forest model.**
+```{r echo=FALSE,fig.width=8,fig.height=6,fig.align = 'center'}
+varImpPlot(rf1,n.var = 25,main = 'The top 25 importance predictors')
+```
+
+**From the result, we can say the `budget`, `runtime`, `genres.Adventure`(whether the genres is Adventure or not), `Year` are the most important predictors. And more, for example, the `revenue` can be affected much whether the file genres is Fantasy or whether the file is a 3D imax film.**
+
+### Part II. Predict vote_average
+
+\subsection{a) [5 points]}
+
+In this question, we will use four models, **group lasso regression, logistic regression, SVM and random forest. **
+
+For both model, we first select the features whose correlation with y is not less than 0.05. Finally, we have 203 features.
+
+Since in the raw training data, we have 325 positive observations and 1302 negative observations, which means it is an unbalanced dataset. **Here we try three different strategy to deal with the problem, oversampling, undersampling and SMOTE algorithm.** To compare these model, we will calculate accuracy, sensitivity, specificity, precision, F1 score.
+
+For oversampling method, we choose 1302 observations from positive observations with replacement, thus we have 1302 positive observations and 1302 negative observations.
+
+For undersampling method, we choose 325 observations from negative observations, thus we have 325 positive observations and 325 negative observations.
+
+For SMOTE method(package 'DMwR'), we artificially generate new examples of the minority class using the nearest neighbors of these cases. Furthermore, the majority class examples are also under-sampled, leading to a more balanced dataset. Here we use the parameters `perc.over = 200` and `perc.under = 150`. Finally we have 910 positive observations and 910 negative observations.
+
+For group lasso regression model, we use 10-fold cross-validation to tune the parameter `lambda` and the measure we use is auc. The code and tuning result can be find in HW5_STAT542_huaminz2.Rmd and classification_tune.Rdata.
+
+```{r, echo = F, eval = F}
+rm(list=ls())
+library(glmnet)
+library(randomForest)
+library(caret)
+library(e1071)
+library(DMwR)
+# read data
+data = read.csv('tmdb_5000_movies_step2_with_keyword.csv')
+data = data[-which(data$revenue_budget_ratio > 100),]
+#head(data)
+#colnames(data)
+
+Y <- data$vote_average
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+Y <- as.numeric(Y > 7)
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.05]
+X_test <- X_test[, r >= 0.05]
+
+# SMOTE
+a = as.factor(Y_train)
+b = SMOTE(a~.,cbind(X_train,a), perc.over = 200, perc.under = 150)
+X_train_SMOTE = b[,-204]
+Y_train_SMOTE = as.numeric(paste(b[,c('a')]))
+
+# Under sampling
+Y_train1 <- Y_train[Y_train == 1]
+X_train1 <- X_train[Y_train == 1,]
+Y_train0 <- Y_train[Y_train == 0]
+X_train0 <- X_train[Y_train == 0,]
+set.seed(0)
+temp <- sample(seq(1,length(Y_train0),1), length(Y_train1))
+Y_train_under <- as.factor(c(Y_train1, Y_train0[temp]))
+X_train_under <- rbind(X_train1, X_train0[temp,])
+
+# Over sampling
+Y_train1 <- Y_train[Y_train == 1]
+X_train1 <- X_train[Y_train == 1,]
+Y_train0 <- Y_train[Y_train == 0]
+X_train0 <- X_train[Y_train == 0,]
+set.seed(0)
+temp <- sample(length(Y_train1), length(Y_train0), replace = T)
+Y_train_over <- as.factor(c(Y_train0, Y_train1[temp]))
+X_train_over <- rbind(X_train0, X_train1[temp,])
+
+criterion <- function(y,pred_y){
+  TP = sum(y[pred_y==1]==1)
+  TN = sum(y[pred_y== 0]== 0)
+  FP = sum(y[pred_y==1]== 0)
+  FN = sum(y[pred_y==0]==1)
+  sensitivity = TP/(TP+FN)
+  specificity = TN/(TN+FP)
+  acc = (TP+TN)/(TP+TN+FP+FN)
+  precision = TP/(TN+FP)
+  F1 = 2 * TP / ((2 * TP) + FP + FN)
+  return(list(sensitivity=sensitivity,specificity=specificity,acc=acc,precision=precision,F1=F1))
+}
+```
+```{r, echo = F, eval = F}
+# lasso
+lasso <- function(X_train,Y_train,X_test,Y_test){
+  set.seed(0)
+  X_train <- as.matrix(X_train)
+  X_test <- as.matrix(X_test)
+  Y_train <- as.factor(Y_train)
+  Y_test <- as.factor(Y_test)
+  lasso2.cv <- cv.glmnet(X_train, Y_train, alpha = 1, nfolds = 10, type.measure="auc", family="binomial", type.multinomial = 'grouped')
+  lasso2 <- glmnet(X_train, Y_train, alpha = 1, lambda = lasso2.cv$lambda.min,family="binomial")
+  Y_pre_lasso1 <- predict(lasso2, X_test, type = "class")
+  return(Y_pre_lasso1)
+}
+lasso_under_pre = lasso(X_train_under,Y_train_under,X_test,Y_test)
+lasso_over_pre = lasso(X_train_over,Y_train_over,X_test,Y_test)
+lasso_SMOTE_pre = lasso(X_train_SMOTE,Y_train_SMOTE,X_test,Y_test)
+lasso_raw_pre = lasso(X_train,Y_train,X_test,Y_test)
+lasso_under = criterion(Y_test,lasso_under_pre)
+lasso_over = criterion(Y_test,lasso_over_pre)
+lasso_SMOTE = criterion(Y_test,lasso_SMOTE_pre)
+lasso_raw= criterion(Y_test,lasso_raw_pre)
+```
+
+For logistic regression model, The code can be find in HW5_STAT542_huaminz2.Rmd and classification_tune.Rdata.
+```{r echo=F, warning=F, eval=F}
+#logistic regession
+logistic <- function(X_train,Y_train,X_test,Y_test){
+  set.seed(0)
+  Y_train = as.factor(Y_train)
+  logistic = glm(Y_train~.,data=cbind(X_train,Y_train),family = "binomial")
+  log_pred_y = predict(logistic,X_test)
+  log_pred_y -> log_pred_label
+  log_pred_label[log_pred_label>0.5] = 1
+  log_pred_label[log_pred_label<=0.5] = 0
+  return(log_pred_label)
+}
+logistic_under_pre = logistic(X_train_under,Y_train_under,X_test,Y_test)
+logistic_over_pre = logistic(X_train_over,Y_train_over,X_test,Y_test)
+logistic_SMOTE_pre = logistic(X_train_SMOTE,Y_train_SMOTE,X_test,Y_test)
+logistic_raw_pre = logistic(X_train,Y_train,X_test,Y_test)
+logistic_under = criterion(Y_test,logistic_under_pre)
+logistic_over = criterion(Y_test,logistic_over_pre)
+logistic_SMOTE = criterion(Y_test,logistic_SMOTE_pre)
+logistic_raw= criterion(Y_test,logistic_raw_pre)
+```
+
+For SVM model, we use tune the parameter `kernel` and the constant of the regularization term and the measure we use is sensitivity. The code and tuning result can be find in HW5_STAT542_huaminz2.Rmd and classification_tune.Rdata.
+```{r,echo=F,eval=F}
+svm542 <-function(X_train,Y_train,X_test,Y_test,kernel,cost){
+  set.seed(0)
+  Y_train = as.factor(Y_train)
+  s = svm(Y_train~.,data=cbind(X_train,Y_train),family = "binomial",kernel=kernel,cost=cost)
+  svm_pred_y = predict(s,X_test)
+  return(svm_pred_y)
+}
+svm542_tune <- function(X_train,Y_train){
+  parameter = c(0.01,0.1,1,5,10,100)
+  kernel = c("linear","polynomial","radial")
+  svm_tume = matrix(0,15,3)
+  colnames(svm_tume) = c('cost','kernel','sensitivity')
+  p = 0
+  for (i in 1:length(parameter)){
+    for (j in 1:length(kernel)){
+      p = p + 1
+      cv_partition <- createDataPartition(Y_train, p=.9, list=FALSE)
+      train_1_x = X_train[cv_partition,]
+      train_validation_x = X_train[-cv_partition,]
+      train_1_y = Y_train[cv_partition]
+      train_validation_y = Y_train[-cv_partition]
+      svm_pred_y = svm542(train_1_x,train_1_y,train_validation_x,train_validation_y,kernel=kernel[j],cost=parameter[i])
+      svm_acc = criterion(train_validation_y,svm_pred_y)
+      svm_tume[p,1] = parameter[i];svm_tume[p,2] = kernel[j];
+      svm_tume[p,3] = svm_acc$sensitivity
+    }
+  }
+  return(svm_tume)
+}
+```
+```{r,echo=F,eval=F}
+svm_under_tune = svm542_tune(X_train_under,Y_train_under)
+svm_over_tune = svm542_tune(X_train_over,Y_train_over)
+svm_SMOTE_tune = svm542_tune(X_train_SMOTE,Y_train_SMOTE)
+save(svm_under_tune,svm_over_tune,svm_SMOTE_tune,file='SVM_tume.Rdata')
+```
+```{r echo=F, eval = F}
+svm_under_pre = svm542(X_train_under,Y_train_under,X_test,Y_test,'linear',5)
+svm_over_pre = svm542(X_train_over,Y_train_over,X_test,Y_test,'linear',10)
+svm_SMOTE_pre = svm542(X_train_SMOTE,Y_train_SMOTE,X_test,Y_test,'linear',5)
+svm_raw_pre = svm542(X_train,Y_train,X_test,Y_test,'linear',100)
+svm_under = criterion(Y_test,svm_under_pre)
+svm_over = criterion(Y_test,svm_over_pre)
+svm_SMOTE = criterion(Y_test,svm_SMOTE_pre)
+svm_raw= criterion(Y_test,svm_raw_pre)
+```
+For random forest model, the measure we use is sensitivity. We tune the parameter `mtry`, `nodesize` and `ntree`. The code and tuning result can be find in HW5_STAT542_huaminz2.Rmd and classification_tune.Rdata.
+```{r echo=F,eval=F}
+rf_model_over<-randomForest(X_train_over, Y_train_over,ntree = 1000, mtry = 30, nodesize = 5,keep.forest=T)    
+pred_y_over = predict(rf_model,newdata=X_test)
+rf_over = criterion(Y_test,pred_y_over)
+
+rf_model_under<-randomForest(X_train_under, Y_train_under,ntree = 1000, mtry = 30, nodesize = 5,keep.forest=T)    
+pred_y_under = predict(rf_model,newdata=X_test)
+rf_under = criterion(Y_test,pred_y_under)
+
+rf_model_SMOTE<-randomForest(X_train_SMOTE, Y_train_SMOTE,ntree = 1000, mtry = 30, nodesize = 5,keep.forest=T)    
+pred_y_SMOTE = predict(rf_model,newdata=X_test)
+rf_SMOTE = criterion(Y_test,pred_y_SMOTE)
+
+rf_model_raw<-randomForest(X_train, Y_train,ntree = 1000, mtry = 30, nodesize = 5,keep.forest=T)    
+pred_y_raw = predict(rf_model,newdata=X_test)
+rf_raw = criterion(Y_test,pred_y_raw)
+```
+
+\subsection{b) [5 points]}
+
+Here let show the result.
+
+```{r,echo = F,eval=F}
+SMOTE = cbind(matrix(lasso_SMOTE),matrix(logistic_SMOTE),matrix(svm_SMOTE),matrix(rf_SMOTE))
+over = cbind(matrix(lasso_over),matrix(logistic_over),matrix(svm_over),matrix(rf_over))
+under = cbind(matrix(lasso_under),matrix(logistic_under),matrix(svm_under),matrix(rf_under))
+raw = cbind(matrix(lasso_raw),matrix(logistic_raw),matrix(svm_raw),matrix(rf_raw))
+rownames(SMOTE) = c('sensitivity','specificity','accuracy','precision','F1 score')
+rownames(under) = c('sensitivity','specificity','accuracy','precision','F1 score')
+rownames(raw) = c('sensitivity','specificity','accuracy','precision','F1 score')
+rownames(over) = c('sensitivity','specificity','accuracy','precision','F1 score')
+colnames(SMOTE) = c('lasso','logistic','SVM','Random Forest')
+colnames(under) = c('lasso','logistic','SVM','Random Forest')
+colnames(raw) = c('lasso','logistic','SVM','Random Forest')
+colnames(over) = c('lasso','logistic','SVM','Random Forest')
+```
+The result of SMOTE dataset.
+```{r echo=F}
+load('classification_tune.Rdata')
+SMOTE
+```
+The result of over sampling dataset.
+```{r echo=F}
+over
+```
+The result of under sampling dataset.
+```{r echo=F}
+under
+```
+The result of raw dataset.
+```{r echo=F}
+raw
+```
+According to F1 score which considers both the precision and the recall, the final model we choose is lasso regression with under sampling dataset. The lambda we will is 0.009511977.
+
+**The importance of predictors (top 10)(According to the coefficient of variable, the larger the more influence ) given by lasso regression can be shown as the following:**
+
+```{r echo=FALSE, warning=F}
+m = final_model$model
+as.vector(coef(m)@Dimnames[[1]][order(coef(m))[2:11]])
+```
+Thus, the most important predictor is whether the language of the film is English. Also, we see the genres of a film affects a lot.
+
+\subsection{d) [5 points]}
+```{r,eval=F,echo=F}
+#classification
+test = read.csv('StarWar.csv')
+data = read.csv('tmdb_5000_movies_step2_with_keyword.csv')
+data = data[-which(data$revenue_budget_ratio > 100),]
+#head(data)
+#colnames(data)
+
+Y <- data$vote_average
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+Y <- as.numeric(Y > 7)
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.05]
+X_test <- X_test[, r >= 0.05]
+
+test = read.csv('StarWar.csv')
+test = test[,colnames(X_test)]
+pre = predict(m, X_test, type = "class")
+```
+
+```{r,eval=F,echo=F}
+#regression
+data = read.csv('tmdb_5000_movies_step2_with_keyword.csv')
+data = data[-which(data$revenue_budget_ratio > 100),]
+Y <- data$revenue
+#Y <- data$revenue_budget_ratio
+X <- data[, -c(2, 3, 5, 1887)] #with keyword
+
+# odd id as train, even id as test
+X_train <- X[data$id %% 2 == 1, ]
+X_test <- X[data$id %% 2 == 0, ]
+Y_train <- Y[data$id %% 2 == 1]
+Y_test <- Y[data$id %% 2 == 0]
+
+# select the train x whose correlation with y is not less than 0.1
+X_test <- X_test[,colSums(X_train) > 1]
+X_train <- X_train[,colSums(X_train) > 1]
+r <- abs(cor(Y_train, X_train))
+X_train <- X_train[, r >= 0.1]
+X_test <- X_test[, r >= 0.1]
+
+test = read.csv('StarWar.csv')
+test = test[,colnames(X_test)]
+rf1 = randomForest(X_train, Y_train, ntree = 1000, mtry = 20, nodesize = 5) 
+pre = predict(rf1, test, type = "class")
+```
+
+According to the information of Star Wars(StarWar.csv), we make the classification and regression. The prediction(see the code in rmd file) is that we think the total revenue will be 737310139 and the rating of this file will be greater than 7.(The truth is the rating on IMDB is 8.1 and 93% on Rotten Tomatoes until now, which fit our model)
